@@ -21,6 +21,17 @@ for frame in tf:
 
 """
 
+class TerminalColor:
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKCYAN = '\033[96m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+
 class PhyDecoder:
 	"""@brief TIC physical layer decoder, based on a Linux serial port connection
 	"""
@@ -276,44 +287,88 @@ def list_scaled_to_percent(input):
 			result.append((i*100)//max_value)
 	return (result, max_value)
 
-def draw_elec_icon(image_draw, xy):
-	assert isinstance(xy, tuple)
-	(x, y) = xy
-	image_draw.line((x, y, x+5, y+5), fill=0)
-	image_draw.line((x+5, y+5, x, y+5), fill=0)
-	image_draw.line((x, y+5, x+5, y+10), fill=0)
-	image_draw.line((x+5, y+10, x+2, y+10), fill=0)
-	image_draw.line((x+5, y+10, x+5, y+7), fill=0)
+class LCDDisplay:
+	"""@brief Class driving an LCD display shield
+	"""
+	def __init__(self, image_displayer, lcd_width, lcd_height, top, font_small, font_big):
+		"""@brief Constructor
+		
+		@param image_displayer A callback function taking an Image object and displaying it to the LCD
+		@param image_drawer A
+		"""
+		if not callable(image_displayer):
+			raise TypeError('image_displayer argument is not callable')
+		else:
+			self._image_displayer = image_displayer
+		self.lcd_width = lcd_width
+		self.lcd_height = lcd_height
+		# Make sure to create image with mode '1' for 1-bit color (B&W display)
+		self.image = Image.new('1', (self.lcd_width, self.lcd_height))
+		# Get drawing object to draw on image.
+		self.image_drawer = ImageDraw.Draw(self.image)
+		self.top = top
+		self.font_small = font_small
+		self.font_big = font_big
+		# Draw a white filled box to clear the image.
+		self.clear()
 
-def draw_percentage_graph(image_draw, xyxy, data):
-	assert isinstance(xyxy, tuple)
-	(xleft, ytop, xright, ybottom) = xyxy
-	x = xleft
-	y = ytop
-	height = ybottom - ytop
-	width = xright - xleft
-	assert x == 0
-	# Crop data to the max width
-	data = data[:width]
-	ofs = 0
-	for value in data:
-		bar_sz = value * height // 100	# Scale the percentage to the height
-		image_draw.line((x+ofs, y+height-bar_sz, x+ofs, y+height), fill=0)
-		ofs += 1
+	def clear(self):
+		self.image_drawer.rectangle((0, 0, self.lcd_width, self.lcd_height),
+		                            outline=255,
+		                            fill=255)
 
-def draw_to_lcd(image_draw, top, lcd_width, lcd_height, font_big, font_small, display_data):
-	image_draw.rectangle((0,0,lcd_width,lcd_height), outline=255, fill=255)
-	draw_percentage_graph(image_draw, (0, top+31, lcd_width, lcd_height), display_data.scaled_bar_graph)
-	image_draw.text((0, top+4), str(display_data.displayed_power) + 'W', font=font_big)
-	image_draw.line((0, top+22, lcd_width, top+22), fill=0)
-	if pflow_str is not None:
-		image_draw.text((0, top+23), 'Bilan:' + display_data.pflow_str + 'W', font=font_small)
-	if not display_data.read_error:
-		image_draw.text((0, top), "Puissance soutiree", font=font_small)
-	else:
-		image_draw.text((0, top), "Erreur lecture", font=font_small)
-	if display_data.beat:
-		draw_elec_icon(image_draw, (75, top+8))
+	def display(self):
+		self._image_displayer(self.image)
+
+	def draw_to_image(self, display_data):
+		self.clear()
+		self.image_drawer.text((0, self.top+4), str(display_data.displayed_power) + 'W', font=self.font_big)
+		self.image_drawer.line((0, self.top+22, self.lcd_width, self.top+22), fill=0)
+		if pflow_str is not None:
+			self.image_drawer.text((0, self.top+23), 'Bilan:' + display_data.pflow_str + 'W', font=self.font_small)
+		if not display_data.read_error:
+			self.image_drawer.text((0, self.top), "Puissance soutiree", font=self.font_small)
+		else:
+			self.image_drawer.text((0, self.top), "Erreur lecture", font=self.font_small)
+		if display_data.beat:
+			self._draw_elec_icon((75, self.top+8))
+		self._draw_percentage_graph((0, self.top+31, self.lcd_width, self.lcd_height), display_data.scaled_bar_graph[-self.lcd_width:])
+
+	def _draw_percentage_graph(self, xyxy, data):
+		assert isinstance(xyxy, tuple)
+		(xleft, ytop, xright, ybottom) = xyxy
+		x = xleft
+		y = ytop
+		height = ybottom - ytop
+		width = xright - xleft
+		assert x == 0
+		# Crop data to the max width
+		data = data[:width]
+		ofs = 0
+		bottom_y = y+height-1
+		for value in data:
+			bar_sz = value * height // 100	# Scale the percentage to the height
+			self.image_drawer.line((x+ofs, bottom_y-bar_sz, x+ofs, bottom_y), fill=0)
+			ofs += 1
+
+	def _draw_elec_icon(self, xy):
+		assert isinstance(xy, tuple)
+		(x, y) = xy
+		self.image_drawer.line((x, y, x+5, y+5), fill=0)
+		self.image_drawer.line((x+5, y+5, x, y+5), fill=0)
+		self.image_drawer.line((x, y+5, x+5, y+10), fill=0)
+		self.image_drawer.line((x+5, y+10, x+2, y+10), fill=0)
+		self.image_drawer.line((x+5, y+10, x+5, y+7), fill=0)
+
+def evaluate_power_flow(current, voltage, is_injecting):
+	pflow_min = (irms+0.5) * urms
+	pflow_max = (irms-0.5) * urms
+	if inject:
+		(pflow_min, pflow_max) = (-pflow_min, -pflow_max)	# Negative values when injecting
+	if pflow_min>pflow_max:
+		(pflow_min, pflow_max) = (pflow_max, pflow_min)
+	pflow_str = '[' + str(int(round(pflow_min))) + ';' + str(int(round(pflow_max))) + ']'
+	return (pflow_str, pflow_min, pflow_max)
 
 if __name__ == "__main__":
 	print('Starting...')
@@ -333,25 +388,15 @@ if __name__ == "__main__":
 	# Clear display.
 	disp.clear()
 	disp.display()
+	
+	def image_displayer(image):
+		disp.image(image)
+		disp.display()
 
-	# Create blank image for drawing.
-	# Make sure to create image with mode '1' for 1-bit color.
-	width = LCD.LCDWIDTH
-	height = LCD.LCDHEIGHT
-	image = Image.new('1', (width, height))
-
-	# Get drawing object to draw on image.
-	draw = ImageDraw.Draw(image)
-
-	# Draw a white filled box to clear the image.
-	draw.rectangle((0,0,LCD.LCDWIDTH,LCD.LCDHEIGHT), outline=255, fill=255)
-
-	# Load default font.
-	#font = ImageFont.load_default()
-	font_small=ImageFont.truetype('DejaVuSans.ttf', 8)
-	font_big=ImageFont.truetype('DejaVuSans.ttf', 18)
-
-	top=-1
+	display_driver = LCDDisplay(image_displayer=image_displayer,
+	                            lcd_width=LCD.LCDWIDTH, lcd_height=LCD.LCDHEIGHT, top=-1,
+	                            font_small=ImageFont.truetype('DejaVuSans.ttf', 8),
+	                            font_big=ImageFont.truetype('DejaVuSans.ttf', 18))
 
 	phy = PhyDecoder(baudrate=9600, port="/dev/ttyUSB0")
 	link_decoder = TICLinkLayerDecoder(phy)
@@ -360,25 +405,18 @@ if __name__ == "__main__":
 	beat = True
 	successive_sinsts_errors = 0
 	last_sinsts = -1
+	successive_null_sinsts = 0
 
 	display_queue = Queue.Queue()
 
 	def display_to_lcd(data_queue):
-		print('Display thread start')
 		while True:
 			new_display_data = display_queue.get()
 			while not display_queue.empty():
 				print('Running late... discarding one display data')
 				display_queue.get()
-			print('Drawing')
-			draw_to_lcd(image_draw=draw,
-				    top=top, lcd_width=LCD.LCDWIDTH, lcd_height=LCD.LCDHEIGHT,
-				    font_big=font_big, font_small=font_small,
-				    display_data=new_display_data)
-			print('Starting xfer to LCD display')
-			disp.image(image)
-			disp.display()
-			print('xfer to LCD display done')
+			display_driver.draw_to_image(display_data=new_display_data)
+			display_driver.display()
 
 	#display_thread = threading.Thread(target=display_to_lcd, args=(display_queue), daemon=True)
 	display_thread = threading.Thread(target=display_to_lcd, args=(display_queue,))
@@ -391,10 +429,17 @@ if __name__ == "__main__":
 		#temp = round(temp, 1)
 		read_error = False
 		power = None
+		new_switch_to_withdrawn_power = False
 		try:
 			last_sinsts=int(frame['SINSTS'])
 			power = last_sinsts
 			successive_sinsts_errors = 0
+			if last_sinsts == 0:
+				successive_null_sinsts += 1
+			else:
+				if successive_null_sinsts > 10:
+					new_switch_to_withdrawn_power = True
+				successive_null_sinsts = 0
 		except Exception as e:
 			successive_sinsts_errors += 1
 			read_error = True
@@ -403,35 +448,39 @@ if __name__ == "__main__":
 		# Power has an up-to-date value (and thus is not None) only if SINSTS read was successful
 		hist.append(power)	# Add the current reading (or None if reading failed)
 		(scaled_bar_graph, max_value) = list_scaled_to_percent(input=hist.to_fixed_width_list())
-		print(str(scaled_bar_graph))
+		if new_switch_to_withdrawn_power:
+			prefix=TerminalColor.FAIL
+		else:
+			prefix=''
+		print(prefix + '(MAX=' + str(max_value) + 'W)' + str(scaled_bar_graph) + TerminalColor.ENDC)
 		displayed_power = power
 		if successive_sinsts_errors < 3:	# We keep drawing the previous SINST value until 2 successive errors
 			displayed_power = last_sinsts	# Set power to the last known power (old reading)
 		if successive_sinsts_errors == 0:
 			print('Power=' + str(displayed_power) + 'W')
 		pflow_str = None
+		irms = None
+		inject = (power == 0)
 		if not read_error:
 			try:
 				irms=int(frame['IRMS1'])
 				urms=int(frame['URMS1'])
-				inject = (power == 0)
-				if True:
-					# We are injecting
-					pflow_min = (irms+0.5) * urms
-					pflow_max = (irms-0.5) * urms
-					if inject:
-						(pflow_min, pflow_max) = (-pflow_min, -pflow_max)	# Negative values when injecting
-					if pflow_min>pflow_max:
-						(pflow_min, pflow_max) = (pflow_max, pflow_min)
-					pflow_str = '[' + str(int(round(pflow_min))) + ';' + str(int(round(pflow_max))) + ']'
-				else:
-					pflow_str = str(power)
+				(pflow_str, _, _) = evaluate_power_flow(current=irms, voltage=urms, is_injecting=inject)
 			except Exception as e:
 				read_error = True
 				tb = traceback.format_exc()
 				print(tb)
 		if pflow_str is not None:
-			print('Pflow=' + pflow_str + 'W')
+			if irms is not None:
+				prefix=''
+				if irms == 0:	# We are around 0 injection, 0 withdrawn, use yellow
+					prefix=TerminalColor.WARNING
+				elif inject:
+					prefix=TerminalColor.OKGREEN
+				else:
+					prefix=TerminalColor.FAIL
+			print(prefix + 'Pflow=' + pflow_str + 'W' + TerminalColor.ENDC)
+			
 		
 		new_display_data = DisplayData(scaled_bar_graph=scaled_bar_graph, displayed_power=displayed_power, pflow_str=pflow_str, read_error=read_error, beat=beat)
 		display_queue.put_nowait(new_display_data)

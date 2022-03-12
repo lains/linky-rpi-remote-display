@@ -12,11 +12,12 @@ import Queue
 import time
 
 """
-import display_linky
-s=display_linky.PhyDecoder(baudrate=9600, port="/dev/ttyUSB0")
-l=display_linky.TICLinkLayer(s)
-tf=display_linky.TICFrame(l,standard_tic_mode=True)
-for frame in tf:
+Sample use as a Linky decoding library
+import display_linky	# Import the library
+s=display_linky.PhyDecoder(baudrate=9600, port="/dev/ttyUSB0")	# Enable the TIC phy decoder on serial port ttyUSB0 at baudrate 9600 ("TIC historique")
+l=display_linky.TICLinkLayerDecoder(s)	# Create a Link layer decoder, fetching raw data from the previous PhyDecoder
+tf=display_linky.TICFrames(l,standard_tic_mode=True)	# Create a TIC frame parser
+for frame in tf:	# Forever loop returning each new frame as it is ready from the serial port
  print(frame)
 
 """
@@ -39,7 +40,7 @@ class PhyDecoder:
 	DEFAULT_BITS_PER_SYMBOL = serial.SEVENBITS
 	DEFAULT_PARITY = serial.PARITY_EVEN
 	DEFAULT_STOP_BITS = serial.STOPBITS_ONE
-	
+
 	def __init__(self,
 	             port,
 	             baudrate=DEFAULT_BAUDRATE,
@@ -67,13 +68,17 @@ class TICLinkLayerDecoder:
 	"""
 	STX_BYTE = '\x02'
 	ETX_BYTE = '\x03'
-	
+
 	def __init__(self, phy_decoder):
+		"""@brief TIC Link kayer decoder
+
+		@param phy_decoder An instance of type PhyDecoder that provides incoming bytes read from the serial port (possibliy by chunks)
+		"""
 		assert isinstance(phy_decoder, PhyDecoder)
 		self._phy_decoder = phy_decoder
 		self.initial_frame_sync = False
 		self.incoming_buffer = ''
-	
+
 	def get_next_frame(self):
 		self.incoming_buffer += self._phy_decoder.get_next_incoming_bytes()
 		stx_pos = self.incoming_buffer.find(self.STX_BYTE)
@@ -98,10 +103,14 @@ class TICDataSetExtractor:
 	"""
 	LF = '\x0A'
 	CR = '\x0D'
-	
+
 	def __init__(self, frame):
+		"""@brief Create a TIC dataset extractor based on a raw TIC frame payload
+
+		@param frame The raw TIC frame (without STX/ETX bytes)
+		"""
 		self.frame = frame
-	
+
 	def __iter__(self):
 		while len(self.frame) > 0:
 			dataset = self.get_next_dataset()
@@ -109,8 +118,12 @@ class TICDataSetExtractor:
 				return
 			else:
 				yield dataset
-	
+
 	def get_next_dataset(self):
+		"""@brief Continue parsing the next available dataset
+
+		@return The new dataset as a buffer (or  None if the frame was fully decoded)
+		"""
 		start_dataset_pos = self.frame.find(self.LF)
 		if start_dataset_pos == -1:	# No start marker, do not decode
 			return None
@@ -131,26 +144,31 @@ class TICFrames:
 	"""@brief Class that allows to extract data from TIC frames
 	"""
 	def __init__(self, tic_link_frame_fetcher, standard_tic_mode=False):
+		"""@brief Create a TIC frame parsing instance
+
+		@param tic_link_frame_fetcher An object of type TICLinkLayerDecoder used to fetch and extract TIC datasets
+		@param standard_tic_mode True if we should we decode using "TIC standard" mode, False if we should decode using "TIC historique" mode
+		"""
 		self._tic_link_frame_fetcher = tic_link_frame_fetcher
 		self.standard_tic_mode = standard_tic_mode
-	
+
 	def __iter__(self):
 		while True:
 			yield self.get_next()
-	
+
 	@staticmethod
 	def _checksum(data):
 		chksum = sum([ord(c) for c in data])
 		chksum = (chksum & 63) + 32
 		return chr(chksum)
-	
+
 	def get_next(self):
 		frame = ''
 		while not frame:	# Block until a new frame is available
 			frame = self._tic_link_frame_fetcher()
 			if not frame:
 				time.sleep(0.2)
-		
+
 		dataset_extractor = TICDataSetExtractor(frame=frame)
 		decoded_frame = {}
 		for dataset in dataset_extractor:
@@ -160,7 +178,7 @@ class TICFrames:
 			else:
 				data_payload = dataset.split(" ")
 				checksummed_payload = dataset[:-2]
-			
+
 			etiquette = data_payload[0]
 			if len(data_payload) == 3:
 				value = data_payload[1].strip()
@@ -169,14 +187,14 @@ class TICFrames:
 			else:
 				print('Error: Bad data payload:' + str(dataset))
 				continue
-			
+
 			enclosed_checksum = dataset[-1]
 			computed_checksum = self._checksum(checksummed_payload)
 			if enclosed_checksum == computed_checksum:
 				decoded_frame[etiquette] = value
 			else:
 				print('Error: Bad checksum on :' + str(line) + '| checksum:' + str(chksum) + ', vs:' + str(computedchksum))
-			
+
 		return decoded_frame
 
 class LinkyHorodate:
@@ -190,10 +208,10 @@ class LinkyHorodate:
 		self.heure = heure
 		self.minute = minute
 		self.seconde = seconde
-	
+
 	def __repr__(self):
 		return 'LinkyHorodate(' + 'saison=' + str(self.saison) + ',' + 'date=' + str(self.jour) + '/' + str(self.mois) + '/' + str(self.annee) + ',' + 'heure=' + str(self.heure) + ':' + str(self.minute) + ':' + str(seconde) + ')'
-	
+
 	@staticmethod
 	def from_horodate_string(input):
 		assert isinstance(input, str)
@@ -208,7 +226,7 @@ class LinkyHorodate:
 
 class FixedWidthHistoryBarGraph:
 	"""@brief Database storing history of values
-	
+
 	The values in database can be converted to a fixed-width bar graph, for graphical display
 	"""
 	def __init__(self, width, history_requested_size):
@@ -228,7 +246,7 @@ class FixedWidthHistoryBarGraph:
 			self.history_max_size = width * self.scale_down_factor
 			print('Scaling down, each line will be the average of ' + str(self.scale_down_factor) + ' samples')
 		self.history = []
-		
+
 	def append(self, value):
 		if self.scale_up_factor is not None:	# Scaling up
 			self.history.append(value)	# Just add the raw value
@@ -250,7 +268,7 @@ class FixedWidthHistoryBarGraph:
 				self.history.append(value)
 		if len(self.history) > self.history_max_size:
 			self.history = self.history[len(self.history)-self.history_max_size:]
-	
+
 	def to_fixed_width_list(self):
 		if self.scale_up_factor is not None:	# Scaling up
 			result = []
@@ -261,7 +279,7 @@ class FixedWidthHistoryBarGraph:
 			return self.history
 
 class DisplayData:
-	"""@brief Class representing all the data displayed on the LCD screen
+	"""@brief Data class storing all the data to display on the LCD screen
 	"""
 	def __init__(self, scaled_bar_graph, displayed_power, pflow_str, read_error, beat):
 		self.scaled_bar_graph = scaled_bar_graph
@@ -292,9 +310,13 @@ class LCDDisplay:
 	"""
 	def __init__(self, image_displayer, lcd_width, lcd_height, top, font_small, font_big):
 		"""@brief Constructor
-		
+
 		@param image_displayer A callback function taking an Image object and displaying it to the LCD
-		@param image_drawer A
+		@param lcd_width The width of the LCD screen in pixels
+		@param lcd_height The height of the LCD screen in pixels
+		@param top The offset (in y coords) where we should start drawing, compared to the top of the screen
+		@param font_small A font to draw tiny text strings
+		@param font_big A font to draw big text strings (the withdrawn power measurement)
 		"""
 		if not callable(image_displayer):
 			raise TypeError('image_displayer argument is not callable')
@@ -361,6 +383,12 @@ class LCDDisplay:
 		self.image_drawer.line((x+5, y+10, x+5, y+7), fill=0)
 
 def evaluate_power_flow(current, voltage, is_injecting):
+	"""@brief Try to guess a range containing the current power flow (positive=withdrawn from the grid, negative=injected on the grid)
+
+	@param current The instantaneous rms current
+	@param voltage The instantaneous rms voltage
+	@param is_injecting True if we are injecting to the grid
+	"""
 	pflow_min = (irms+0.5) * urms
 	pflow_max = (irms-0.5) * urms
 	if inject:
@@ -388,7 +416,7 @@ if __name__ == "__main__":
 	# Clear display.
 	disp.clear()
 	disp.display()
-	
+
 	def image_displayer(image):
 		disp.image(image)
 		disp.display()
@@ -418,12 +446,12 @@ if __name__ == "__main__":
 			display_driver.draw_to_image(display_data=new_display_data)
 			display_driver.display()
 
-	#display_thread = threading.Thread(target=display_to_lcd, args=(display_queue), daemon=True)
+	#display_thread = threading.Thread(target=display_to_lcd, args=(display_queue), daemon=True) # Only available on recent python versions
 	display_thread = threading.Thread(target=display_to_lcd, args=(display_queue,))
 	display_thread.start()
 
 	for frame in tic_frames:
-		''' cputemp '''
+		# Historical code to get current CPU temp (unused)
 		#with open("/sys/class/thermal/thermal_zone0/temp") as temp_f:
 		#	temp = float(temp_f.read()) / 1000.0
 		#temp = round(temp, 1)
@@ -480,10 +508,10 @@ if __name__ == "__main__":
 				else:
 					prefix=TerminalColor.FAIL
 			print(prefix + 'Pflow=' + pflow_str + 'W' + TerminalColor.ENDC)
-			
-		
+
+
 		new_display_data = DisplayData(scaled_bar_graph=scaled_bar_graph, displayed_power=displayed_power, pflow_str=pflow_str, read_error=read_error, beat=beat)
 		display_queue.put_nowait(new_display_data)
-		
+
 		if successive_sinsts_errors == 0:
 			beat = not beat

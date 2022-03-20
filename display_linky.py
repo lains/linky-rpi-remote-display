@@ -10,6 +10,7 @@ import serial
 import threading
 import Queue
 import time
+import datetime
 
 """
 Sample use as a Linky decoding library
@@ -193,7 +194,7 @@ class TICFrames:
 			if enclosed_checksum == computed_checksum:
 				decoded_frame[etiquette] = value
 			else:
-				print('Error: Bad checksum on dataset:' + str(dataset) + '| checksum:' + str(chksum) + ', vs:' + str(computedchksum))
+				print('Error: Bad checksum on dataset:' + str(dataset) + '| checksum:' + str(enclosed_checksum) + ', vs:' + str(computed_checksum))
 
 		return decoded_frame
 
@@ -446,7 +447,7 @@ if __name__ == "__main__":
 	phy = PhyDecoder(baudrate=9600, port="/dev/ttyUSB0")
 	link_decoder = TICLinkLayerDecoder(phy)
 	tic_frames = TICFrames(tic_link_frame_fetcher=link_decoder.get_next_frame, standard_tic_mode=True)
-	hist = FixedWidthHistoryBarGraph(width=LCD.LCDWIDTH, history_requested_size=60*15) # Collect the last 15 minutes of power measurement in the lower graph
+	hist = FixedWidthHistoryBarGraph(width=LCD.LCDWIDTH, history_requested_size=60*15) # Collect an amount of historical power measurement in the lower graph
 	beat = True
 	successive_sinsts_errors = 0
 	last_sinsts = -1
@@ -467,7 +468,14 @@ if __name__ == "__main__":
 	display_thread = threading.Thread(target=display_to_lcd, args=(display_queue,))
 	display_thread.start()
 
+	first_frame_time = datetime.datetime.now()
+	total_frames_received = 0
 	for frame in tic_frames:
+		total_frames_received += 1
+		total_frame_decode_duration_s = (datetime.datetime.now() - first_frame_time).total_seconds()
+		#print('Total frame decoding: ' + str(total_frame_decode_duration_s) + 's')
+		avg_inter_frame_period_ms = total_frame_decode_duration_s * 1000 / total_frames_received
+		print('Avg inter-frame period: ' + str(avg_inter_frame_period_ms) + 'ms')
 		# Historical code to get current CPU temp (unused)
 		#with open("/sys/class/thermal/thermal_zone0/temp") as temp_f:
 		#	temp = float(temp_f.read()) / 1000.0
@@ -493,7 +501,9 @@ if __name__ == "__main__":
 		# Power has an up-to-date value (and thus is not None) only if SINSTS read was successful
 		hist.append(power)	# Add the current reading (or None if reading failed)
 		(scaled_bar_graph, max_value) = list_scaled_to_percent(input=hist.to_fixed_width_list())
-		bars_in_graph_for_1min = hist.get_nb_history_items_for_input_values(120)	# Roughly 2 measurements per second in "TIC standard" mode, so 120 measurements per minute
+		nb_frames_for_1_timescale_div = 5 * 60 * 1000 // avg_inter_frame_period_ms
+		print(str(nb_frames_for_1_timescale_div) + ' frames per 5 minutes')
+		bars_in_graph_for_1min = hist.get_nb_history_items_for_input_values(nb_frames_for_1_timescale_div)	# Get the number of measurements to covert 1 timescale division (as calculated above) in the current TIC mode
 		if new_switch_to_withdrawn_power:
 			prefix=TerminalColor.FAIL
 		else:

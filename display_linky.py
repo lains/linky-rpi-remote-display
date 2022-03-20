@@ -193,7 +193,7 @@ class TICFrames:
 			if enclosed_checksum == computed_checksum:
 				decoded_frame[etiquette] = value
 			else:
-				print('Error: Bad checksum on :' + str(line) + '| checksum:' + str(chksum) + ', vs:' + str(computedchksum))
+				print('Error: Bad checksum on dataset:' + str(dataset) + '| checksum:' + str(chksum) + ', vs:' + str(computedchksum))
 
 		return decoded_frame
 
@@ -239,7 +239,7 @@ class FixedWidthHistoryBarGraph:
 		else:
 			# We will scale down, averaging several values into one bar graph line
 			self.scale_down_factor = history_requested_size // width
-			if history_requested_size % width != 0: # There is a reminder, round to the next higher integer
+			if history_requested_size % width != 0: # There is a remainder, round to the next higher integer
 				self.scale_down_factor += 1
 			self.accumulated_values_for_scale_down = []
 			self.scale_up_factor = None
@@ -269,6 +269,16 @@ class FixedWidthHistoryBarGraph:
 		if len(self.history) > self.history_max_size:
 			self.history = self.history[len(self.history)-self.history_max_size:]
 
+	def get_nb_history_items_for_input_values(self, nb_input_values):
+		"""@brief Return the number of output history items matching with a given number of input values
+		"""
+		if self.scale_up_factor is not None:	# Scaling up
+			return nb_input_values * self.scale_up_factor
+		elif self.scale_down_factor is not None:
+			return nb_input_values // self.scale_down_factor
+		else:
+			return None
+
 	def to_fixed_width_list(self):
 		if self.scale_up_factor is not None:	# Scaling up
 			result = []
@@ -281,12 +291,13 @@ class FixedWidthHistoryBarGraph:
 class DisplayData:
 	"""@brief Data class storing all the data to display on the LCD screen
 	"""
-	def __init__(self, scaled_bar_graph, displayed_power, pflow_str, read_error, beat):
+	def __init__(self, scaled_bar_graph, displayed_power, pflow_str, read_error, beat, vert_lines_freq=None):
 		self.scaled_bar_graph = scaled_bar_graph
 		self.displayed_power = displayed_power
 		self.pflow_str = pflow_str
 		self.read_error = read_error
 		self.beat = beat
+		self.vert_lines_freq = vert_lines_freq
 
 def list_scaled_to_percent(input):
 	max_value = 0
@@ -354,9 +365,9 @@ class LCDDisplay:
 			self.image_drawer.text((0, self.top), "Erreur lecture", font=self.font_small)
 		if display_data.beat:
 			self._draw_elec_icon((75, self.top+8))
-		self._draw_percentage_graph((0, self.top+31, self.lcd_width, self.lcd_height), display_data.scaled_bar_graph[-self.lcd_width:])
+		self._draw_percentage_graph((0, self.top+31, self.lcd_width, self.lcd_height), display_data.scaled_bar_graph[-self.lcd_width:], vert_lines_freq=display_data.vert_lines_freq)
 
-	def _draw_percentage_graph(self, xyxy, data):
+	def _draw_percentage_graph(self, xyxy, data, vert_lines_freq=None):
 		assert isinstance(xyxy, tuple)
 		(xleft, ytop, xright, ybottom) = xyxy
 		x = xleft
@@ -371,6 +382,12 @@ class LCDDisplay:
 		for value in data:
 			bar_sz = value * height // 100	# Scale the percentage to the height
 			self.image_drawer.line((x+ofs, bottom_y-bar_sz, x+ofs, bottom_y), fill=0)
+			if vert_lines_freq is not None and ((len(data) - ofs) % vert_lines_freq == 0):	# We should display a vertical line to represent time
+				print('len(data)=' + str(len(data)) + ', ofs=' + str(ofs) + '=>displaying a time marker (freq is ' + str(vert_lines_freq))
+				if bar_sz > height//2:	# Bar is higher than 50%, draw a white line at the bottom
+					self.image_drawer.line((x+ofs, bottom_y-bar_sz+2, x+ofs, bottom_y), fill=255)
+				else:
+					self.image_drawer.line((x+ofs, y, x+ofs, bottom_y-bar_sz-2), fill=0)
 			ofs += 1
 
 	def _draw_elec_icon(self, xy):
@@ -476,6 +493,7 @@ if __name__ == "__main__":
 		# Power has an up-to-date value (and thus is not None) only if SINSTS read was successful
 		hist.append(power)	# Add the current reading (or None if reading failed)
 		(scaled_bar_graph, max_value) = list_scaled_to_percent(input=hist.to_fixed_width_list())
+		bars_in_graph_for_1min = hist.get_nb_history_items_for_input_values(120)	# Roughly 2 measurements per second in "TIC standard" mode, so 120 measurements per minute
 		if new_switch_to_withdrawn_power:
 			prefix=TerminalColor.FAIL
 		else:
@@ -510,7 +528,7 @@ if __name__ == "__main__":
 			print(prefix + 'Pflow=' + pflow_str + 'W' + TerminalColor.ENDC)
 
 
-		new_display_data = DisplayData(scaled_bar_graph=scaled_bar_graph, displayed_power=displayed_power, pflow_str=pflow_str, read_error=read_error, beat=beat)
+		new_display_data = DisplayData(scaled_bar_graph=scaled_bar_graph, displayed_power=displayed_power, pflow_str=pflow_str, read_error=read_error, beat=beat, vert_lines_freq=bars_in_graph_for_1min)
 		display_queue.put_nowait(new_display_data)
 
 		if successive_sinsts_errors == 0:
